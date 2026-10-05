@@ -34,7 +34,7 @@ cadence meant knowing both existed, and nothing would have failed if only one ha
 | `constants/TVSizes.ts` | TV poster sizes, gaps, padding, animation timings |
 | `constants/TVTypography.ts` | TV type scale and the `useScaledTVTypography` hook |
 | `constants/TVPosterSizes.ts` | TV poster size keys |
-| `constants/Playback.ts` | Playback reporting policy shared by the JS and native players (progress report cadence) |
+| `constants/Playback.ts` | Playback policy shared by the JS and native players (progress report cadence, play queue size cap) |
 | `constants/Music.ts` | Music player policy: the volume normalization modes, their default, and the gain ceiling |
 | `constants/Sentry.ts` | Error reporting policy: which builds report, the per session dedupe cap, the failure storm window |
 | `constants/Jellyfin.ts` | Jellyfin server queries: how long the public server info is trusted |
