@@ -493,6 +493,8 @@ export type Settings = {
   hideBrightnessSlider: boolean;
   usePopularPlugin: boolean;
   mergeNextUpAndContinueWatching: boolean;
+  /** Home row of episodes about to air, from every TV library. Off by default. */
+  showUpcomingOnHome: boolean;
   /**
    * Home hero carousel filters. Both are "hidden" lists, so an empty list
    * (the default) shows everything, and they combine: hiding the
@@ -673,6 +675,7 @@ export const defaultValues: Settings = {
   hideBrightnessSlider: false,
   usePopularPlugin: true,
   mergeNextUpAndContinueWatching: false,
+  showUpcomingOnHome: false,
   hiddenHomeHeroSections: [],
   hiddenHomeHeroMediaTypes: [],
   useEpisodeImagesForNextUp: false,
