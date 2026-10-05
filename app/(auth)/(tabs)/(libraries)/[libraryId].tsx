@@ -86,7 +86,7 @@ import {
   SortOrderOption,
   sortByAtom,
   sortByPreferenceAtom,
-  sortOptions,
+  sortOptionsFor,
   sortOrderAtom,
   sortOrderOptions,
   sortOrderPreferenceAtom,
@@ -476,6 +476,8 @@ const Page = () => {
       params: { parentId: libraryId },
     } as any);
   }, [router, libraryId]);
+
+  const sortOptions = sortOptionsFor(library?.CollectionType);
 
   const navigation = useNavigation();
   useEffect(() => {
@@ -955,7 +957,9 @@ const Page = () => {
               <FilterButton
                 className='mr-1'
                 id={libraryId}
-                queryKey='sortBy'
+                // The options depend on the library's type, which can arrive
+                // after the button has cached the list for this id.
+                queryKey={`sortBy:${library?.CollectionType ?? ""}`}
                 queryFn={async () => sortOptions.map((s) => s.key)}
                 set={setSortBy}
                 values={sortBy}
@@ -1023,6 +1027,8 @@ const Page = () => {
       filterBy,
       setFilter,
       generalFilters,
+      sortOptions,
+      library?.CollectionType,
     ],
   );
 
@@ -1087,7 +1093,7 @@ const Page = () => {
         value: option.key,
         selected: sortBy[0] === option.key,
       })),
-    [sortBy],
+    [sortBy, sortOptions],
   );
 
   const tvSortOrderOptions = useMemo(
