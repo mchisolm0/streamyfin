@@ -685,12 +685,21 @@ const Page = () => {
   // to the first of its titles.
   const pendingScrollTopRef = useRef(false);
 
+  // Where the top of the list is. The iOS header is transparent and the list
+  // runs under it, inset by the header's height, so its top sits at minus that
+  // height: offset 0 would leave the tabs and the filter bar behind the header.
+  const headerHeight = useHeaderHeight();
+  const listTopOffset = Platform.OS === "ios" ? -headerHeight : 0;
+
   // Instant feedback: pin to the top as soon as the filters change, without
   // waiting for the new fetch, and flag a re-pin for once it settles.
   useEffect(() => {
-    flashListRef.current?.scrollToOffset({ offset: 0, animated: false });
+    flashListRef.current?.scrollToOffset({
+      offset: listTopOffset,
+      animated: false,
+    });
     pendingScrollTopRef.current = true;
-  }, [filterSignature, jump]);
+  }, [filterSignature, jump, listTopOffset]);
 
   // Safety net: FlashList can restore the previous offset as the filtered list
   // grows, so re-pin once the fetch settles. Pagination keeps the same
@@ -700,9 +709,12 @@ const Page = () => {
   useEffect(() => {
     if (pendingScrollTopRef.current && !isFetching) {
       pendingScrollTopRef.current = false;
-      flashListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      flashListRef.current?.scrollToOffset({
+        offset: listTopOffset,
+        animated: false,
+      });
     }
-  }, [isFetching, flatData, jump]);
+  }, [isFetching, flatData, jump, listTopOffset]);
 
   // A playlist normally opens the music playlist screen, which plays its
   // entries through the music player. The ones listed under a library hold that
@@ -1236,7 +1248,6 @@ const Page = () => {
   }, [showOptions, t, tvFilterByOptions, setFilter, _setFilterBy]);
 
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
 
   // Play All and Shuffle. Covered by hooks/useLibraryPlayQueue.test.tsx.
   const { playAll, shuffle, isStarting } = useLibraryPlayQueue(libraryFilter);
@@ -1308,6 +1319,10 @@ const Page = () => {
             </View>
           }
           contentInsetAdjustmentBehavior='automatic'
+          // React Native clamps a programmatic scroll to the inset it was
+          // given, and the header's inset is one the system adds on its own,
+          // so without this the pin to listTopOffset is cut back to 0.
+          scrollToOverflowEnabled
           data={grid.data}
           renderItem={grid.renderItem}
           extraData={[orientation, nrOfCols]}
