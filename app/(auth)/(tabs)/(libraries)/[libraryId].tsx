@@ -9,20 +9,33 @@ import {
   getUserLibraryApi,
 } from "@jellyfin/sdk/lib/utils/api";
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useIsFetching,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   useFocusEffect,
   useLocalSearchParams,
   useNavigation,
 } from "expo-router";
+import { useHeaderHeight } from "expo-router/react-navigation";
 import { useAtom } from "jotai";
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import {
   BackHandler,
   FlatList,
   Platform,
   ScrollView,
+  TVFocusGuideView,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -35,10 +48,13 @@ import { getItemNavigation } from "@/components/common/TouchableItemRouter";
 import { FilterButton } from "@/components/filters/FilterButton";
 import { ResetFiltersButton } from "@/components/filters/ResetFiltersButton";
 import { Loader } from "@/components/Loader";
+import { AlphabetRail } from "@/components/library/AlphabetRail";
+import { TVAlphabetRow } from "@/components/library/TVAlphabetRow";
 import { TVFilterButton, TVFocusablePoster } from "@/components/tv";
 import { TVPosterCard } from "@/components/tv/TVPosterCard";
 import { useScaledTVPosterSizes } from "@/constants/TVPosterSizes";
 import { useScaledTVTypography } from "@/constants/TVTypography";
+import { TAB_HEIGHT } from "@/constants/Values";
 import useRouter from "@/hooks/useAppRouter";
 import { useFilterReset } from "@/hooks/useFilterReset";
 import { useOrientation } from "@/hooks/useOrientation";
@@ -71,12 +87,14 @@ import {
   yearPreferenceAtom,
 } from "@/utils/atoms/filters";
 import type { TVOptionItem } from "@/utils/atoms/tvOptionModal";
+import { alphabetJumpParams } from "@/utils/jellyfin/alphabetJump";
 import { getPrimaryImageUrl } from "@/utils/jellyfin/image/getPrimaryImageUrl";
 
 const TV_ITEM_GAP = 20;
 const TV_HORIZONTAL_PADDING = 60;
 const _TV_SCALE_PADDING = 20;
 const TV_PLAYLIST_SQUARE_SIZE = 180;
+const OUTGOING_LIST_OPACITY = 0.4;
 
 const Page = () => {
   const searchParams = useLocalSearchParams() as {
@@ -373,6 +391,37 @@ const Page = () => {
     }
   }, [navigation, fromSeeAll]);
 
+  const filterSignature = [
+    selectedGenres.join(","),
+    selectedYears.join(","),
+    selectedTags.join(","),
+    sortBy[0],
+    sortOrder[0],
+    filterBy.join(","),
+  ].join("|");
+
+  // The alphabet picker. A letter is a place in the list the filters describe,
+  // so it is remembered with their signature and only applies while they
+  // match it: a list under other filters opens at its top. The logic is
+  // covered by utils/jellyfin/alphabetJump.test.ts.
+  const canJumpToLetter = sortBy[0] === SortByOption.SortName;
+  const [jump, setJump] = useState<{ letter: string; scope: string } | null>(
+    null,
+  );
+  const jumpLetter = jump?.scope === filterSignature ? jump.letter : null;
+  const jumpTo = useCallback(
+    (letter: string) => setJump({ letter, scope: filterSignature }),
+    [filterSignature],
+  );
+  const jumpParams = useMemo(
+    () =>
+      alphabetJumpParams(
+        jumpLetter,
+        sortOrder[0] === SortOrderOption.Descending,
+      ),
+    [jumpLetter, sortOrder],
+  );
+
   const fetchItems = useCallback(
     async ({
       pageParam,
@@ -419,6 +468,7 @@ const Page = () => {
         ...(Platform.isTV && library.CollectionType === "playlists"
           ? { mediaTypes: ["Video"] }
           : {}),
+        ...jumpParams,
       });
 
       return response.data || null;
@@ -434,6 +484,7 @@ const Page = () => {
       sortBy,
       sortOrder,
       filterBy,
+      jumpParams,
     ],
   );
 
@@ -448,8 +499,13 @@ const Page = () => {
         sortBy,
         sortOrder,
         filterBy,
+        jumpParams,
       ],
       queryFn: fetchItems,
+      // A jump moves within the list already on screen, so that list stays up
+      // until the new page lands. Falling back to the loader would unmount the
+      // page, and on TV take the focus off the letter that was just pressed.
+      placeholderData: jumpLetter ? keepPreviousData : undefined,
       getNextPageParam: (lastPage, pages) => {
         if (
           !lastPage?.Items ||
@@ -473,6 +529,15 @@ const Page = () => {
       enabled: !!api && !!user?.Id && !!library,
     });
 
+  // A list of this library on its way for the first time. With a list still
+  // on screen that is a jump landing, since any other change shows the loader,
+  // and the list being left is dimmed until then.
+  const isJumpLanding =
+    useIsFetching({
+      queryKey: ["library-items", libraryId],
+      predicate: (query) => query.state.data === undefined,
+    }) > 0;
+
   const flatData = useMemo(() => {
     return (
       (data?.pages.flatMap((p) => p?.Items).filter(Boolean) as BaseItemDto[]) ||
@@ -483,15 +548,9 @@ const Page = () => {
   const flashListRef = useRef<FlashListRef<CardData>>(null);
 
   // Jump the grid back to the top when the filters or the sort change, reset
-  // included, instead of staying deep in the previous result set.
-  const filterSignature = [
-    selectedGenres.join(","),
-    selectedYears.join(","),
-    selectedTags.join(","),
-    sortBy[0],
-    sortOrder[0],
-    filterBy.join(","),
-  ].join("|");
+  // included, instead of staying deep in the previous result set. A letter
+  // jump counts too, the same letter again included: it is the way back to
+  // the first of its titles.
   const pendingScrollTopRef = useRef(false);
 
   // Instant feedback: pin to the top as soon as the filters change, without
@@ -499,17 +558,19 @@ const Page = () => {
   useEffect(() => {
     flashListRef.current?.scrollToOffset({ offset: 0, animated: false });
     pendingScrollTopRef.current = true;
-  }, [filterSignature]);
+  }, [filterSignature, jump]);
 
   // Safety net: FlashList can restore the previous offset as the filtered list
   // grows, so re-pin once the fetch settles. Pagination keeps the same
-  // signature, so it never re-pins.
+  // signature, so it never re-pins. A jump that fetches nothing (the same
+  // letter again) settles here at once: left flagged, it would re-pin on the
+  // next page instead.
   useEffect(() => {
     if (pendingScrollTopRef.current && !isFetching) {
       pendingScrollTopRef.current = false;
       flashListRef.current?.scrollToOffset({ offset: 0, animated: false });
     }
-  }, [isFetching, flatData]);
+  }, [isFetching, flatData, jump]);
 
   const grid = useCardGrid({
     items: flatData,
@@ -937,6 +998,7 @@ const Page = () => {
   }, [showOptions, t, tvFilterByOptions, setFilter, _setFilterBy]);
 
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
 
   if (isLoading || isLibraryLoading)
     return (
@@ -952,6 +1014,7 @@ const Page = () => {
         <FlashList
           ref={flashListRef}
           key={orientation}
+          style={{ opacity: isJumpLanding ? OUTGOING_LIST_OPACITY : 1 }}
           ListEmptyComponent={
             <View className='flex flex-col items-center justify-center h-full'>
               <Text className='font-bold text-xl text-neutral-500'>
@@ -981,6 +1044,19 @@ const Page = () => {
             <View style={{ height: grid.rowGap }} />
           )}
         />
+        {canJumpToLetter && (
+          <AlphabetRail
+            active={jumpLetter}
+            onSelect={jumpTo}
+            // Only the iOS header is transparent, with the list running under
+            // it; the tab bar is cleared on both platforms.
+            style={{
+              top: Platform.OS === "ios" ? headerHeight : 0,
+              bottom: TAB_HEIGHT + insets.bottom,
+              right: insets.right,
+            }}
+          />
+        )}
         {grid.actionSheet}
       </>
     );
@@ -1007,8 +1083,14 @@ const Page = () => {
       }}
       scrollEventThrottle={400}
     >
-      {/* Filter bar */}
-      <View
+      {/* Filter bar. Next to the letter row it is a focus guide, and so is the
+          grid, because tvOS only moves the focus to what lies straight ahead:
+          the bar is narrower than the row and a short grid is too, so the
+          outer letters would have nothing above or below them. A guide is as
+          wide as the page and hands the focus to one of its children. Without
+          the row both stay plain views, as they were. */}
+      <TVFocusGuideView
+        autoFocus={canJumpToLetter}
         style={{
           flexDirection: "row",
           flexWrap: "nowrap",
@@ -1078,7 +1160,11 @@ const Page = () => {
           onPress={handleShowFilterByFilter}
           hasActiveFilter={filterBy.length > 0}
         />
-      </View>
+      </TVFocusGuideView>
+
+      {canJumpToLetter && (
+        <TVAlphabetRow active={jumpLetter} onSelect={jumpTo} />
+      )}
 
       {/* Grid with flexWrap */}
       {flatData.length === 0 ? (
@@ -1095,16 +1181,18 @@ const Page = () => {
           </Text>
         </View>
       ) : (
-        <View
+        <TVFocusGuideView
+          autoFocus={canJumpToLetter}
           style={{
             flexDirection: "row",
             flexWrap: "wrap",
             justifyContent: "center",
             gap: TV_ITEM_GAP,
+            opacity: isJumpLanding ? OUTGOING_LIST_OPACITY : 1,
           }}
         >
           {flatData.map((item) => renderTVItem(item))}
-        </View>
+        </TVFocusGuideView>
       )}
 
       {/* Loading indicator */}
