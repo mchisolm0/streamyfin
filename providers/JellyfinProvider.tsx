@@ -132,6 +132,11 @@ export const cacheVersionAtom = atom<number>(0);
 export const pendingAccountSaveAtom = atom<{ serverName?: string } | null>(
   null,
 );
+// The user a password sign-in is signing in to Seerr, with the password it was
+// given. SeerrAutoLogin waits while it is set: the plugin's Seerr address
+// arrives with that sign-in's refresh, and both would otherwise run Quick
+// Connect for the same user and race to open the session.
+export const seerrSignInAtLoginAtom = atom<string | null>(null);
 
 interface LoginOptions {
   saveAccount?: boolean;
@@ -606,72 +611,82 @@ export const JellyfinProvider: React.FC<{ children: ReactNode }> = ({
             }
           }
 
-          const recentPluginSettings = await refreshStreamyfinPluginSettings();
-          // With a plugin-provided API key the auto-connect effect signs in
-          // without a password — don't start a password session here, and
-          // don't store the password either.
-          if (
-            recentPluginSettings?.seerrServerUrl?.value &&
-            !recentPluginSettings?.seerrApiKey?.value
-          ) {
-            const seerrApi = new SeerrApi(
-              recentPluginSettings.seerrServerUrl.value,
-              getIntegrationHeaders("seerr"),
-            );
-            const jellyfinServerUrl = api.basePath;
-            const jellyfinUserId = auth.data.User.Id;
-            const stillCurrent = () =>
-              store.get(userAtom)?.Id === jellyfinUserId;
-            // Quick Connect before the password, and this is the branch where
-            // it matters most: the password is stored here, and a Seerr that
-            // can open a session from the Jellyfin token means there is no
-            // reason to keep the user's password on the device at all.
-            const quickConnected = await signInWithQuickConnect(
-              seerrApi,
-              authedApi,
-              stillCurrent,
-            );
-            if (quickConnected) setSeerrUser(quickConnected);
+          // Held through the refresh and the Seerr sign-in below, so that
+          // SeerrAutoLogin does not start its own for the same user.
+          store.set(seerrSignInAtLoginAtom, auth.data.User.Id ?? null);
+          try {
+            const recentPluginSettings =
+              await refreshStreamyfinPluginSettings();
+            // With a plugin-provided API key the auto-connect effect signs in
+            // without a password — don't start a password session here, and
+            // don't store the password either.
+            if (
+              recentPluginSettings?.seerrServerUrl?.value &&
+              !recentPluginSettings?.seerrApiKey?.value
+            ) {
+              const seerrApi = new SeerrApi(
+                recentPluginSettings.seerrServerUrl.value,
+                getIntegrationHeaders("seerr"),
+              );
+              const jellyfinServerUrl = api.basePath;
+              const jellyfinUserId = auth.data.User.Id;
+              const stillCurrent = () =>
+                store.get(userAtom)?.Id === jellyfinUserId;
+              // Quick Connect before the password, and this is the branch where
+              // it matters most: the password is stored here, and a Seerr that
+              // can open a session from the Jellyfin token means there is no
+              // reason to keep the user's password on the device at all.
+              const quickConnected = await signInWithQuickConnect(
+                seerrApi,
+                authedApi,
+                stillCurrent,
+              );
+              if (quickConnected) setSeerrUser(quickConnected);
 
-            // The password path runs only when Quick Connect could not open a
-            // session, so on a server that supports it nothing is ever stored.
-            // Nor for an account that has since been left: the password is
-            // the previous user's, and would be stored under their id.
-            if (!quickConnected && stillCurrent())
-              await seerrApi.test().then((result) => {
-                if (result.isValid && result.requiresPass) {
-                  seerrApi
-                    .login(username, password)
-                    .then((seerrUser) => {
-                      setSeerrUser(seerrUser);
-                      // Remember the password so Seerr can be signed in
-                      // again on later launches — but only once it has proven
-                      // to work, and only on a server where Quick Connect just
-                      // declined, since that is the token-shaped alternative
-                      // and it runs first. Goes to the platform secure store,
-                      // never MMKV; users who typed their own URL get nothing
-                      // stored, and the autoLoginSeerr toggle opts out.
-                      const autoLogin =
-                        store.get(settingsAtom)?.autoLoginSeerr !== false;
-                      if (jellyfinServerUrl && jellyfinUserId && autoLogin) {
-                        saveSeerrPassword(
-                          jellyfinServerUrl,
-                          jellyfinUserId,
-                          password,
-                        ).catch((e) =>
-                          writeErrorLog(`Could not store Seerr password: ${e}`),
-                        );
-                      }
-                    })
-                    .catch((e) =>
-                      writeErrorLog(
-                        `Seerr sign-in at login failed: ${
-                          e instanceof Error ? e.message : e
-                        }`,
-                      ),
-                    );
-                }
-              });
+              // The password path runs only when Quick Connect could not open a
+              // session, so on a server that supports it nothing is ever stored.
+              // Nor for an account that has since been left: the password is
+              // the previous user's, and would be stored under their id.
+              if (!quickConnected && stillCurrent())
+                await seerrApi.test({ quiet: true }).then((result) => {
+                  if (result.isValid && result.requiresPass) {
+                    return seerrApi
+                      .login(username, password)
+                      .then((seerrUser) => {
+                        setSeerrUser(seerrUser);
+                        // Remember the password so Seerr can be signed in
+                        // again on later launches — but only once it has proven
+                        // to work, and only on a server where Quick Connect just
+                        // declined, since that is the token-shaped alternative
+                        // and it runs first. Goes to the platform secure store,
+                        // never MMKV; users who typed their own URL get nothing
+                        // stored, and the autoLoginSeerr toggle opts out.
+                        const autoLogin =
+                          store.get(settingsAtom)?.autoLoginSeerr !== false;
+                        if (jellyfinServerUrl && jellyfinUserId && autoLogin) {
+                          saveSeerrPassword(
+                            jellyfinServerUrl,
+                            jellyfinUserId,
+                            password,
+                          ).catch((e) =>
+                            writeErrorLog(
+                              `Could not store Seerr password: ${e}`,
+                            ),
+                          );
+                        }
+                      })
+                      .catch((e) =>
+                        writeErrorLog(
+                          `Seerr sign-in at login failed: ${
+                            e instanceof Error ? e.message : e
+                          }`,
+                        ),
+                      );
+                  }
+                });
+            }
+          } finally {
+            store.set(seerrSignInAtLoginAtom, null);
           }
         }
       } catch (error) {
