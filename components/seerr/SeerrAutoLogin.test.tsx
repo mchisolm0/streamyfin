@@ -1,10 +1,7 @@
 import { act, render } from "@testing-library/react-native";
 import { Provider } from "jotai";
-import {
-  apiAtom,
-  seerrSignInAtLoginAtom,
-  userAtom,
-} from "@/providers/JellyfinProvider";
+import { apiAtom, userAtom } from "@/providers/JellyfinProvider";
+import { seerrSignInAtLoginAtom } from "@/utils/seerrSignIn";
 import { store } from "@/utils/store";
 import { SeerrAutoLogin } from "./SeerrAutoLogin";
 
@@ -15,7 +12,6 @@ jest.mock("@/providers/JellyfinProvider", () => {
   return {
     apiAtom: atom(null),
     userAtom: atom(null),
-    seerrSignInAtLoginAtom: atom(null),
   };
 });
 jest.mock("@/hooks/useSeerr", () => ({
@@ -65,7 +61,7 @@ describe("signing in to Seerr at launch", () => {
   });
 
   test("waits while a password sign-in signs the same user in", async () => {
-    store.set(seerrSignInAtLoginAtom, "user");
+    store.set(seerrSignInAtLoginAtom, { userId: "user" });
     await render(
       <Provider store={store}>
         <SeerrAutoLogin />

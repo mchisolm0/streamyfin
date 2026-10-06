@@ -55,6 +55,7 @@ import {
 } from "@/utils/secureCredentials";
 import { deleteSeerrPassword, saveSeerrPassword } from "@/utils/seerrPassword";
 import { signInWithQuickConnect } from "@/utils/seerrQuickConnect";
+import { holdSeerrSignIn } from "@/utils/seerrSignIn";
 import { store } from "@/utils/store";
 import { clearTVDiscoverySafely } from "@/utils/tvDiscovery/sync";
 import { APP_VERSION } from "@/utils/version";
@@ -132,11 +133,6 @@ export const cacheVersionAtom = atom<number>(0);
 export const pendingAccountSaveAtom = atom<{ serverName?: string } | null>(
   null,
 );
-// The user a password sign-in is signing in to Seerr, with the password it was
-// given. SeerrAutoLogin waits while it is set: the plugin's Seerr address
-// arrives with that sign-in's refresh, and both would otherwise run Quick
-// Connect for the same user and race to open the session.
-export const seerrSignInAtLoginAtom = atom<string | null>(null);
 
 interface LoginOptions {
   saveAccount?: boolean;
@@ -613,7 +609,7 @@ export const JellyfinProvider: React.FC<{ children: ReactNode }> = ({
 
           // Held through the refresh and the Seerr sign-in below, so that
           // SeerrAutoLogin does not start its own for the same user.
-          store.set(seerrSignInAtLoginAtom, auth.data.User.Id ?? null);
+          const endSeerrSignIn = holdSeerrSignIn(auth.data.User.Id);
           try {
             const recentPluginSettings =
               await refreshStreamyfinPluginSettings();
@@ -686,7 +682,7 @@ export const JellyfinProvider: React.FC<{ children: ReactNode }> = ({
                 });
             }
           } finally {
-            store.set(seerrSignInAtLoginAtom, null);
+            endSeerrSignIn();
           }
         }
       } catch (error) {
