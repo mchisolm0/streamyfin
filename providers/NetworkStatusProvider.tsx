@@ -15,6 +15,7 @@ import {
   customHeadersVersionAtom,
   getJellyfinHeaders,
 } from "@/utils/customHeaders";
+import { writeToLog } from "@/utils/log";
 import { jellyfinProbe } from "@/utils/serverUrl/probes/jellyfin";
 
 interface NetworkStatusContextType {
@@ -56,6 +57,7 @@ export function NetworkStatusProvider({ children }: { children: ReactNode }) {
   const [customHeadersVersion] = useAtom(customHeadersVersionAtom);
   const queryClient = useQueryClient();
   const wasServerConnected = useRef<boolean | null>(null);
+  const lastNetwork = useRef<string | null>(null);
 
   const validateConnection = useCallback(async () => {
     if (!api?.basePath) return false;
@@ -73,6 +75,19 @@ export function NetworkStatusProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(async (state) => {
+      // A Wi-Fi/cellular handover is the first suspect when playback stalls,
+      // and nothing else in a log export says which network a stall was on.
+      const network =
+        state.type === "cellular" && state.details?.cellularGeneration
+          ? `cellular ${state.details.cellularGeneration}`
+          : state.type;
+      if (network !== lastNetwork.current) {
+        writeToLog(
+          "INFO",
+          `Network: ${lastNetwork.current ?? "?"} -> ${network}`,
+        );
+        lastNetwork.current = network;
+      }
       setIsConnected(!!state.isConnected);
       if (state.isConnected) {
         await validateConnection();

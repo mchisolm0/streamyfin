@@ -155,6 +155,8 @@ final class MPVLayerRenderer {
     private var activeLoadGeneration: UInt = 0
     /// Position updates dropped while a load waits for its file; logged at START_FILE.
     private var skippedReplacedFileUpdates = 0
+    /// Queue-confined: when the current buffering stall began, for the app log.
+    private var stallStartedAt: Date?
 
     /// From load() until mpv starts that file, time-pos, duration and the
     /// paused clock still describe the file being replaced. Kept out of the
@@ -459,6 +461,21 @@ final class MPVLayerRenderer {
         checkError(mpv_set_option_string(mpv, "subs-match-os-language", "yes"))
         checkError(mpv_set_option_string(mpv, "subs-fallback", "yes"))
         checkError(mpv_set_option_string(mpv, "sub-vsfilter-bidi-compat", "yes"))
+
+        // Reconnect a dropped HTTP connection instead of freezing. Every remote
+        // read goes through FFmpeg's http protocol, whose reconnect options all
+        // default to off: when a cellular or Tailscale path dies mid-file the
+        // read just fails and playback sits on the last frame until the user
+        // seeks or restarts. With these, FFmpeg reopens at the same byte offset
+        // with a Range request. network-timeout bounds how long a silent socket
+        // is trusted before that happens. reconnect_at_eof stays off: it makes
+        // FFmpeg retry a complete file's real end. From streamyfin#1878.
+        checkError(mpv_set_option_string(mpv, "network-timeout", "10"))
+        checkError(mpv_set_option_string(
+            mpv,
+            "stream-lavf-o",
+            "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5"
+        ))
 
         // Bundled fallback fonts. Must run before mpv_initialize() — libass is
         // configured once, from the config dir mpv resolves at init time.
@@ -1026,6 +1043,8 @@ final class MPVLayerRenderer {
                 resetDeinterlace(handle)
             }
             #endif
+            // A stall the previous file never finished must not hide the next one.
+            stallStartedAt = nil
             let entryId = event.data?.assumingMemoryBound(to: mpv_event_start_file.self).pointee.playlist_entry_id
             // A load whose reply named no entry falls back to order, so it
             // still becomes current instead of holding every position back.
@@ -1138,12 +1157,19 @@ final class MPVLayerRenderer {
             // (stop, quit, error, redirect) fire during teardown and stream
             // replacement, where an end event would incorrectly trigger the
             // native player's auto-advance/auto-close.
-            if let endFile = event.data?.assumingMemoryBound(to: mpv_event_end_file.self).pointee,
-               endFile.reason == MPV_END_FILE_REASON_EOF {
+            guard let endFile = event.data?.assumingMemoryBound(to: mpv_event_end_file.self).pointee else { break }
+            if endFile.reason == MPV_END_FILE_REASON_EOF {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.delegate?.rendererDidReachEnd(self)
                 }
+            } else if endFile.reason == MPV_END_FILE_REASON_ERROR {
+                // Teardown ends files with stop/quit; only an error says why
+                // playback died, which a stall report otherwise lacks.
+                Logger.shared.log(
+                    "File ended with error: \(String(cString: mpv_error_string(endFile.error))) at \(Int(cachedPosition))s of \(Int(cachedDuration))s",
+                    type: "Error"
+                )
             }
 
         case MPV_EVENT_PROPERTY_CHANGE:
@@ -1261,6 +1287,7 @@ final class MPVLayerRenderer {
             let status = getProperty(handle: handle, name: name, format: MPV_FORMAT_FLAG, value: &flag)
             if status >= 0 {
                 let buffering = flag != 0
+                logStall(buffering: buffering)
                 if buffering != isLoading {
                     isLoading = buffering
                     DispatchQueue.main.async { [weak self] in
@@ -1301,6 +1328,27 @@ final class MPVLayerRenderer {
     /// summaries ("AO: [audiounit] 48000Hz stereo 2ch floatp", "VO: ...") and
     /// anything the audio output itself says. Everything else at info level
     /// is per-track chatter.
+    /// One app-log line when playback pauses to buffer and one when it
+    /// resumes, with how long it waited. A stall that never ends reads as a
+    /// dead connection; many short ones read as a slow one. Called on the mpv
+    /// queue, which confines stallStartedAt.
+    private func logStall(buffering: Bool) {
+        if buffering {
+            guard stallStartedAt == nil else { return }
+            stallStartedAt = Date()
+            Logger.shared.log(
+                "Buffering at \(Int(cachedPosition))s, \(String(format: "%.1f", cachedCacheSeconds))s cached",
+                type: "Warn"
+            )
+        } else if let startedAt = stallStartedAt {
+            stallStartedAt = nil
+            Logger.shared.log(
+                "Buffering ended after \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s",
+                type: "Info"
+            )
+        }
+    }
+
     private static func isDiagnosticInfoLine(component: String, text: String) -> Bool {
         if component == "ao" || component.hasPrefix("ao/") { return true }
         return text.hasPrefix("AO: ") || text.hasPrefix("VO: ")
