@@ -55,6 +55,10 @@
       "bun": "1.4.4",
       "environment": "production",
       "autoIncrement": true,
+      "channel": "production",
+      "env": {
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+      },
       "android": {
         "image": "latest",
         "config": "android-production.yml"
@@ -110,8 +114,7 @@
   "submit": {
     "production": {
       "ios": {
-        "appleTeamId": "MWD5K362T8",
-        "ascAppId": "6593660679"
+        "appleTeamId": "69V3522FCX"
       },
       "android": {
         "serviceAccountKeyPath": "./google-service-account.json",
@@ -121,8 +124,7 @@
     },
     "production_tv": {
       "ios": {
-        "appleTeamId": "MWD5K362T8",
-        "ascAppId": "6593660679"
+        "appleTeamId": "69V3522FCX"
       }
     }
   }
